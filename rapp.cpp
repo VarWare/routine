@@ -292,9 +292,9 @@ void rapp::UpdateCheck (HWND hparent)
 	if (!hparent && (!ConfigGet (L"CheckUpdates", true).AsBool () || (_r_unixtime_now () - ConfigGet (L"CheckUpdatesLast", 0LL).AsLonglong ()) <= _APP_UPDATE_PERIOD))
 		return;
 
-	const HANDLE hthread = _r_createthread (&UpdateCheckThread, (LPVOID)pupdateinfo, true);
+	pupdateinfo->hthread = _r_createthread (&UpdateCheckThread, (LPVOID)pupdateinfo, true);
 
-	if (!hthread)
+	if (!pupdateinfo->hthread)
 		return;
 
 	pupdateinfo->htaskdlg = nullptr;
@@ -315,8 +315,6 @@ void rapp::UpdateCheck (HWND hparent)
 #pragma _R_WARNING(IDS_UPDATE_INIT)
 #endif // IDS_UPDATE_INIT
 
-			pupdateinfo->hthread = hthread;
-
 			UpdateDialogNavigate (nullptr, nullptr, TDF_SHOW_PROGRESS_BAR, TDCBF_CANCEL_BUTTON, nullptr, str_content, (LONG_PTR)pupdateinfo);
 
 			return;
@@ -326,7 +324,7 @@ void rapp::UpdateCheck (HWND hparent)
 #endif // _APP_NO_WINXP
 	}
 
-	ResumeThread (hthread);
+	ResumeThread (pupdateinfo->hthread);
 }
 #endif // _APP_HAVE_UPDATES
 
@@ -831,29 +829,6 @@ LRESULT CALLBACK rapp::MainWindowProc (HWND hwnd, UINT msg, WPARAM wparam, LPARA
 			break;
 		}
 
-		//case WM_GETDPISCALEDSIZE:
-		//{
-		//	INT dpi = static_cast<INT>(wparam);
-		//	double scaling_factor = static_cast<double>(dpi) / USER_DEFAULT_SCREEN_DPI;
-
-		//	RECT rc_client;
-
-		//	if (!GetClientRect (hwnd, &rc_client))
-		//		return FALSE;
-
-		//	rc_client.right = static_cast<LONG>(rc_client.right * scaling_factor);
-		//	rc_client.bottom = static_cast<LONG>(rc_client.bottom * scaling_factor);
-
-		//	_r_wnd_adjustwindowrect (hwnd, &rc_client);
-
-		//	LPSIZE new_size = reinterpret_cast<LPSIZE>(lparam);
-
-		//	new_size->cx = _R_RECT_WIDTH (&rc_client);
-		//	new_size->cy = _R_RECT_HEIGHT (&rc_client);
-
-		//	return TRUE;
-		//}
-
 		case WM_DPICHANGED:
 		{
 #ifdef _APP_HAVE_SETTINGS
@@ -1022,7 +997,7 @@ bool rapp::CreateMainWindow (INT dlg_id, INT icon_id, DLGPROC proc)
 
 #ifdef _APP_HAVE_UPDATES
 		UpdateAddComponent (app_name, app_name_short, app_version, GetDirectory (), true);
-		UpdateAddComponent (L"Language pack", L"language", _r_fmt (L"%" PRId64, LocaleGetVersion ()), GetLocalePath (), false);
+		UpdateAddComponent (L"Language pack", L"language", _r_fmt (L"%" PRIi64, LocaleGetVersion ()), GetLocalePath (), false);
 #endif _APP_HAVE_UPDATES
 
 		app_hwnd = CreateDialog (nullptr, MAKEINTRESOURCE (dlg_id), nullptr, proc);
@@ -1922,7 +1897,7 @@ bool rapp::UpdateDownloadCallback (DWORD total_written, DWORD total_length, LONG
 	{
 		rapp *this_ptr = static_cast<rapp*>(pupdateinfo->papp);
 
-		const DWORD percent = (DWORD)_R_PERCENT_OF (total_written, total_length);
+		const INT percent = (INT)_R_PERCENT_OF (total_written, total_length);
 
 #ifndef _APP_NO_WINXP
 		if (this_ptr->IsVistaOrLater ())
@@ -1969,33 +1944,30 @@ UINT WINAPI rapp::UpdateDownloadThread (LPVOID lparam)
 			{
 				PAPP_UPDATE_COMPONENT pcomponent = pupdateinfo->components.at (i);
 
-				if (pcomponent)
+				if (pcomponent && pcomponent->is_haveupdate && !pcomponent->is_downloaded)
 				{
-					if (pcomponent->is_haveupdates && !pcomponent->is_downloaded)
+					HANDLE hfile = CreateFile (pcomponent->filepath, GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+
+					if (hfile != INVALID_HANDLE_VALUE)
 					{
-						HANDLE hfile = CreateFile (pcomponent->filepath, GENERIC_WRITE | GENERIC_READ, FILE_SHARE_READ, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-
-						if (hfile != INVALID_HANDLE_VALUE)
+						if (_r_inet_downloadurl (hsession, proxy_addr, pcomponent->url, (LONG_PTR)hfile, true, &this_ptr->UpdateDownloadCallback, (LONG_PTR)pupdateinfo) == ERROR_SUCCESS)
 						{
-							if (_r_inet_downloadurl (hsession, proxy_addr, pcomponent->url, (LONG_PTR)hfile, true, &this_ptr->UpdateDownloadCallback, (LONG_PTR)pupdateinfo) == ERROR_SUCCESS)
+							pcomponent->is_downloaded = true;
+							pcomponent->is_haveupdate = false;
+
+							is_downloaded = true;
+
+							if (pcomponent->is_installer)
 							{
-								pcomponent->is_downloaded = true;
-								pcomponent->is_haveupdates = false;
+								SAFE_DELETE_HANDLE (hfile);
 
-								is_downloaded = true;
+								is_downloaded_installer = true;
 
-								if (pcomponent->is_installer)
-								{
-									SAFE_DELETE_HANDLE (hfile);
-
-									is_downloaded_installer = true;
-
-									break;
-								}
+								break;
 							}
-
-							SAFE_DELETE_HANDLE (hfile);
 						}
+
+						SAFE_DELETE_HANDLE (hfile);
 					}
 				}
 			}
@@ -2096,13 +2068,6 @@ HRESULT CALLBACK rapp::UpdateDialogCallback (HWND hwnd, UINT msg, WPARAM wparam,
 		case TDN_DESTROYED:
 		{
 			SetEvent (pupdateinfo->hend);
-
-			if (pupdateinfo->hthread)
-			{
-				TerminateThread (pupdateinfo->hthread, 0);
-				SAFE_DELETE_HANDLE (pupdateinfo->hthread);
-			}
-
 			break;
 		}
 
@@ -2231,13 +2196,13 @@ UINT WINAPI rapp::UpdateCheckThread (LPVOID lparam)
 		const bool is_beta = this_ptr->ConfigGet (L"CheckUpdatesBeta", false).AsBool ();
 #endif // _APP_BETA
 
-		rstring buffer;
-
 		rstring proxy_addr = this_ptr->GetProxyConfiguration ();
 		HINTERNET hsession = _r_inet_createsession (this_ptr->GetUserAgent (), proxy_addr);
 
 		if (hsession)
 		{
+			rstring buffer;
+
 			if (_r_inet_downloadurl (hsession, proxy_addr, _r_fmt (_APP_WEBSITE_URL L"/update.php?product=%s&is_beta=%d&api=3", this_ptr->app_name_short, is_beta), (LONG_PTR)&buffer, false, nullptr, 0) != ERROR_SUCCESS)
 			{
 				if (pupdateinfo->hparent)
@@ -2278,50 +2243,45 @@ UINT WINAPI rapp::UpdateCheckThread (LPVOID lparam)
 					{
 						PAPP_UPDATE_COMPONENT pcomponent = pupdateinfo->components.at (i);
 
-						if (pcomponent)
+						if (pcomponent && !_r_str_isempty (pcomponent->short_name) && result.find (pcomponent->short_name) != result.end ())
 						{
-							if (!_r_str_isempty (pcomponent->short_name) && result.find (pcomponent->short_name) != result.end ())
+							const rstring& rlink = result[pcomponent->short_name];
+							const size_t split_pos = _r_str_find (rlink, rlink.GetLength (), L'|');
+
+							if (split_pos == INVALID_SIZE_T)
+								continue;
+
+							const rstring new_version = _r_str_extract (rlink, rlink.GetLength (), 0, split_pos);
+							const rstring new_url = _r_str_extract (rlink, rlink.GetLength (), split_pos + 1);
+
+							if (!new_version.IsEmpty () && !new_url.IsEmpty () && (_r_str_isnumeric (new_version) ? (wcstoll (pcomponent->version, nullptr, 10) < new_version.AsLonglong ()) : (_r_str_versioncompare (pcomponent->version, new_version) == -1)))
 							{
-								const rstring& rlink = result[pcomponent->short_name];
-								const size_t split_pos = _r_str_find (rlink, rlink.GetLength (), L'|');
+								is_updateavailable = true;
 
-								if (split_pos == INVALID_SIZE_T)
-									continue;
+								pcomponent->is_haveupdate = true;
 
-								const rstring new_version = _r_str_extract (rlink, rlink.GetLength (), 0, split_pos);
-								const rstring new_url = _r_str_extract (rlink, rlink.GetLength (), split_pos + 1);
+								_r_str_alloc (&pcomponent->new_version, new_version.GetLength (), new_version);
+								_r_str_alloc (&pcomponent->url, new_url.GetLength (), new_url);
 
-								if (!new_version.IsEmpty () && !new_url.IsEmpty () && (_r_str_isnumeric (new_version) ? (wcstoll (pcomponent->version, nullptr, 10) < new_version.AsLonglong ()) : (_r_str_versioncompare (pcomponent->version, new_version) == -1)))
+								if (pcomponent->is_installer)
 								{
-									is_updateavailable = true;
-
-									_r_str_alloc (&pcomponent->new_version, new_version.GetLength (), new_version);
-									_r_str_alloc (&pcomponent->url, new_url.GetLength (), new_url);
-
-									pcomponent->is_haveupdates = true;
-
-									if (pcomponent->is_installer)
-									{
-										_r_str_alloc (&pcomponent->filepath, _r_str_length (this_ptr->GetUpdatePath ()), this_ptr->GetUpdatePath ());
-									}
-									else
-									{
-										rstring path;
-										path.Format (L"%s\\%s-%s-%s.tmp", _r_path_expand (L"%temp%\\").GetString (), this_ptr->app_name_short, pcomponent->short_name, new_version.GetString ());
-
-										_r_str_alloc (&pcomponent->filepath, path.GetLength (), path);
-										_r_str_alloc (&pcomponent->version, new_version.GetLength (), new_version);
-									}
-
-									updates_text.AppendFormat (L"- %s %s\r\n", pcomponent->full_name, format_version (new_version).GetString ());
-
-									// do not check components when new version of application available
-									if (pcomponent->is_installer)
-										break;
+									_r_str_alloc (&pcomponent->filepath, _r_str_length (this_ptr->GetUpdatePath ()), this_ptr->GetUpdatePath ());
 								}
+								else
+								{
+									rstring path;
+									path.Format (L"%s\\%s-%s-%s.tmp", _r_path_expand (L"%temp%\\").GetString (), this_ptr->app_name_short, pcomponent->short_name, new_version.GetString ());
+
+									_r_str_alloc (&pcomponent->filepath, path.GetLength (), path);
+								}
+
+								updates_text.AppendFormat (L"%s %s\r\n", pcomponent->full_name, format_version (new_version).GetString ());
+
+								// do not check components when new version of application available
+								if (pcomponent->is_installer)
+									break;
 							}
 						}
-
 					}
 
 					if (is_updateavailable)
@@ -2339,13 +2299,11 @@ UINT WINAPI rapp::UpdateCheckThread (LPVOID lparam)
 
 #ifdef _APP_NO_WINXP
 						this_ptr->UpdateDialogNavigate (pupdateinfo->htaskdlg, nullptr, 0, TDCBF_YES_BUTTON | TDCBF_NO_BUTTON, str_main, updates_text, (LONG_PTR)pupdateinfo);
-
 						WaitForSingleObjectEx (pupdateinfo->hend, INFINITE, FALSE);
 #else
 						if (this_ptr->IsVistaOrLater ())
 						{
 							this_ptr->UpdateDialogNavigate (pupdateinfo->htaskdlg, nullptr, 0, TDCBF_YES_BUTTON | TDCBF_NO_BUTTON, str_main, updates_text, (LONG_PTR)pupdateinfo);
-
 							WaitForSingleObjectEx (pupdateinfo->hend, INFINITE, FALSE);
 						}
 						else
@@ -2364,33 +2322,45 @@ UINT WINAPI rapp::UpdateCheckThread (LPVOID lparam)
 							}
 						}
 #endif // _APP_NO_WINXP
+						bool is_updated = false;
+
 						for (size_t i = 0; i < pupdateinfo->components.size (); i++)
 						{
 							PAPP_UPDATE_COMPONENT pcomponent = pupdateinfo->components.at (i);
 
-							if (pcomponent)
+							if (pcomponent && pcomponent->is_downloaded)
 							{
-								if (pcomponent->is_downloaded)
+								if (!pcomponent->is_installer)
 								{
-									if (!pcomponent->is_installer)
+									// set new version
 									{
-										SetFileAttributes (pcomponent->target_path, FILE_ATTRIBUTE_NORMAL);
-										_r_fs_move (pcomponent->filepath, pcomponent->target_path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED);
+										SAFE_DELETE_ARRAY (pcomponent->version);
 
-										this_ptr->ConfigInit (); // reload configuration
-
-										if (this_ptr->GetHWND ())
-										{
-											SendMessage (this_ptr->GetHWND (), RM_CONFIG_UPDATE, 0, 0);
-											SendMessage (this_ptr->GetHWND (), RM_INITIALIZE, 0, 0);
-											SendMessage (this_ptr->GetHWND (), RM_LOCALIZE, 0, 0);
-
-											DrawMenuBar (this_ptr->GetHWND ());
-										}
-
-										_r_fs_delete (pcomponent->filepath, false);
+										pcomponent->version = pcomponent->new_version;
+										pcomponent->new_version = nullptr;
 									}
+
+									SetFileAttributes (pcomponent->target_path, FILE_ATTRIBUTE_NORMAL);
+
+									_r_fs_move (pcomponent->filepath, pcomponent->target_path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED);
+									_r_fs_delete (pcomponent->filepath, false);
+
+									is_updated = true;
 								}
+							}
+						}
+
+						if (is_updated)
+						{
+							this_ptr->ConfigInit (); // reload configuration
+
+							if (this_ptr->GetHWND ())
+							{
+								SendMessage (this_ptr->GetHWND (), RM_CONFIG_UPDATE, 0, 0);
+								SendMessage (this_ptr->GetHWND (), RM_INITIALIZE, 0, 0);
+								SendMessage (this_ptr->GetHWND (), RM_LOCALIZE, 0, 0);
+
+								DrawMenuBar (this_ptr->GetHWND ());
 							}
 						}
 					}

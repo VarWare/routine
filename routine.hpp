@@ -348,7 +348,7 @@ FORCEINLINE bool _r_str_isempty (LPCWSTR text)
 
 bool _r_str_isnumeric (LPCWSTR text);
 
-bool _r_str_alloc (LPWSTR *pbuffer, size_t length, LPCWSTR text);
+bool _r_str_alloc (LPWSTR* pbuffer, size_t length, LPCWSTR text);
 
 void _r_str_cat (LPWSTR buffer, size_t length, LPCWSTR text);
 void _r_str_copy (LPWSTR buffer, size_t length, LPCWSTR text);
@@ -369,6 +369,7 @@ size_t _r_str_reversefind (LPCWSTR text, size_t length, WCHAR char_find, size_t 
 
 bool _r_str_match (LPCWSTR text, LPCWSTR pattern);
 void _r_str_replace (LPWSTR text, WCHAR char_from, WCHAR char_to);
+void _r_str_trim (LPWSTR text, LPCWSTR trim);
 void _r_str_trim (rstring& text, LPCWSTR trim);
 
 #define _r_str_lower RtlDowncaseUnicodeChar
@@ -380,7 +381,7 @@ void _r_str_toupper (LPWSTR text);
 rstring _r_str_extract (LPCWSTR text, size_t length, size_t start_pos, size_t extract_length = INVALID_SIZE_T);
 rstring& _r_str_extract_ref (rstring& text, size_t start_pos, size_t extract_length = INVALID_SIZE_T);
 
-bool _r_str_multibyte2widechar (UINT cp, LPCSTR in_text, LPWSTR out_text, size_t length);
+LPWSTR _r_str_utf8_to_utf16 (LPCSTR text);
 
 void _r_str_split (LPCWSTR text, size_t length, WCHAR delimiter, rstringvec& rvc);
 bool _r_str_unserialize (LPCWSTR text, WCHAR delimeter, WCHAR key_delimeter, rstringmap1 * lpresult);
@@ -522,7 +523,7 @@ void _r_wnd_setdarktheme (HWND hwnd);
 
 HINTERNET _r_inet_createsession (LPCWSTR useragent, LPCWSTR proxy_addr);
 DWORD _r_inet_openurl (HINTERNET hsession, LPCWSTR url, LPCWSTR proxy_addr, LPHINTERNET pconnect, LPHINTERNET prequest, PDWORD ptotallength);
-bool _r_inet_readrequest (HINTERNET hrequest, LPSTR buffer, DWORD length, PDWORD preaded, PDWORD ptotalreaded);
+bool _r_inet_readrequest (HINTERNET hrequest, LPSTR buffer, DWORD buffer_length, PDWORD preaded, PDWORD ptotalreaded);
 DWORD _r_inet_parseurl (LPCWSTR url, INT *scheme_ptr, LPWSTR host_ptr, LPWORD port_ptr, LPWSTR path_ptr, LPWSTR user_ptr, LPWSTR pass_ptr);
 DWORD _r_inet_downloadurl (HINTERNET hsession, LPCWSTR proxy_addr, LPCWSTR url, LONG_PTR lpdest, bool is_filepath, _R_CALLBACK_HTTP_DOWNLOAD _callback, LONG_PTR lpdata);
 #define _r_inet_close(h) if(h){WinHttpCloseHandle(h);h=nullptr;}

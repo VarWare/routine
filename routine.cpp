@@ -1234,7 +1234,7 @@ bool _r_str_isnumeric (LPCWSTR text)
 	return true;
 }
 
-bool _r_str_alloc (LPWSTR * pbuffer, size_t length, LPCWSTR text)
+bool _r_str_alloc (LPWSTR* pbuffer, size_t length, LPCWSTR text)
 {
 	if (!pbuffer)
 		return false;
@@ -1246,7 +1246,6 @@ bool _r_str_alloc (LPWSTR * pbuffer, size_t length, LPCWSTR text)
 
 	if (length == INVALID_SIZE_T)
 		length = _r_str_length (text);
-
 
 	length += 1;
 
@@ -1306,6 +1305,9 @@ size_t _r_str_length (LPCWSTR text)
 	{
 		++text;
 		++length;
+
+		if (length > _R_STR_MAX_LENGTH)
+			return _R_STR_MAX_LENGTH; // prevent overflow
 	}
 
 	return length;
@@ -1349,11 +1351,7 @@ void _r_str_vprintf (LPWSTR buffer, size_t length, LPCWSTR text, va_list args)
 #pragma warning(pop)
 
 	if (res < 0 || size_t (res) >= max_length)
-	{
-		// need to null terminate the string
-		buffer += max_length;
-		*buffer = UNICODE_NULL;
-	}
+		buffer[max_length] = UNICODE_NULL; // need to null terminate the string
 }
 
 size_t _r_str_hash (LPCWSTR text)
@@ -1534,12 +1532,15 @@ bool _r_str_match (LPCWSTR text, LPCWSTR pattern)
 
 void _r_str_replace (LPWSTR text, WCHAR char_from, WCHAR char_to)
 {
-	while (!_r_str_isempty (text))
+	if (_r_str_isempty (text))
+		return;
+
+	while (*text != UNICODE_NULL)
 	{
 		if (*text == char_from)
 			*text = char_to;
 
-		text += 1;
+		++text;
 	}
 }
 
@@ -1547,9 +1548,15 @@ void _r_str_trim (rstring& text, LPCWSTR trim)
 {
 	if (!text.IsEmpty ())
 	{
-		StrTrim (text.GetBuffer (), trim);
+		_r_str_trim (text.GetBuffer (), trim);
 		text.ReleaseBuffer ();
 	}
+}
+
+void _r_str_trim (LPWSTR text, LPCWSTR trim)
+{
+	if (!_r_str_isempty (text))
+		StrTrim (text, trim);
 }
 
 void _r_str_tolower (LPWSTR text)
@@ -1576,9 +1583,6 @@ rstring _r_str_extract (LPCWSTR text, size_t length, size_t start_pos, size_t ex
 {
 	if (_r_str_isempty (text) || !length)
 		return nullptr;
-
-	if (length == INVALID_SIZE_T)
-		length = _r_str_length (text);
 
 	if ((start_pos == 0) && (extract_length >= length))
 		return text;
@@ -1618,14 +1622,24 @@ rstring& _r_str_extract_ref (rstring& text, size_t start_pos, size_t extract_len
 	return text.SetLength (extract_length);
 }
 
-bool _r_str_multibyte2widechar (UINT cp, LPCSTR in_text, LPWSTR out_text, size_t length)
+LPWSTR _r_str_utf8_to_utf16 (LPCSTR text)
 {
-	if (!in_text || !*in_text)
-		return false;
+	if (!text || *text == ANSI_NULL)
+		return nullptr;
 
-	MultiByteToWideChar (cp, 0, in_text, (DWORD)length, out_text, (DWORD)length);
+	const INT length = static_cast<INT>(strlen (text));
+	INT ret_length = MultiByteToWideChar (CP_UTF8, 0, text, length, nullptr, 0);
 
-	return true;
+	if (!ret_length)
+		return nullptr;
+
+	LPWSTR buffer = new WCHAR[ret_length + 1]; // utilization required!
+
+	ret_length = MultiByteToWideChar (CP_UTF8, 0, text, length, buffer, ret_length);
+
+	buffer[ret_length] = UNICODE_NULL;
+
+	return buffer;
 }
 
 void _r_str_split (LPCWSTR text, size_t length, WCHAR delimiter, rstringvec& rvc)
@@ -1692,7 +1706,7 @@ INT _r_str_versioncompare (LPCWSTR v1, LPCWSTR v2)
 	swscanf_s (v1, L"%d.%d.%d.%d", &oct_v1[0], &oct_v1[1], &oct_v1[2], &oct_v1[3]);
 	swscanf_s (v2, L"%d.%d.%d.%d", &oct_v2[0], &oct_v2[1], &oct_v2[2], &oct_v2[3]);
 
-	for (INT i = 0; i < _countof (oct_v1); i++)
+	for (size_t i = 0; i < _countof (oct_v1); i++)
 	{
 		if (oct_v1[i] > oct_v2[i])
 			return 1;
@@ -2077,9 +2091,6 @@ LONG _r_dc_fontwidth (HDC hdc, LPCWSTR text, size_t length)
 	if (_r_str_isempty (text) || !length)
 		return 0;
 
-	if (length == INVALID_SIZE_T)
-		length = _r_str_length (text);
-
 	SIZE size = {0};
 
 	if (!GetTextExtentPoint32 (hdc, text, (INT)length, &size))
@@ -2153,7 +2164,7 @@ void _r_wnd_center (HWND hwnd, HWND hparent)
 		_r_wnd_centerwindowrect (&rect, &parentRect);
 		_r_wnd_adjustwindowrect (hwnd, &rect);
 
-		_r_wnd_resize (nullptr, hwnd, nullptr, rect.left, rect.top, 0, 0, SWP_NOSIZE);
+		_r_wnd_resize (nullptr, hwnd, nullptr, rect.left, rect.top, 0, 0, 0);
 	}
 	else
 	{
@@ -2167,7 +2178,7 @@ void _r_wnd_center (HWND hwnd, HWND hparent)
 
 			_r_wnd_centerwindowrect (&rect, &monitorInfo.rcWork);
 
-			_r_wnd_resize (nullptr, hwnd, nullptr, rect.left, rect.top, 0, 0, SWP_NOSIZE);
+			_r_wnd_resize (nullptr, hwnd, nullptr, rect.left, rect.top, 0, 0, 0);
 		}
 	}
 }
@@ -2369,7 +2380,7 @@ bool _r_wnd_isfullscreenmode ()
 	return _r_wnd_isplatformfullscreenmode () || _r_wnd_isfullscreenwindowmode () || _r_wnd_isfullscreenconsolemode ();
 }
 
-void _r_wnd_resize (HDWP * hdefer, HWND hwnd, HWND hwnd_after, INT left, INT right, INT width, INT height, UINT flags)
+void _r_wnd_resize (HDWP* hdefer, HWND hwnd, HWND hwnd_after, INT left, INT right, INT width, INT height, UINT flags)
 {
 	flags |= SWP_NOACTIVATE;
 
@@ -2699,53 +2710,11 @@ DWORD _r_inet_openurl (HINTERNET hsession, LPCWSTR url, LPCWSTR proxy_addr, LPHI
 
 				do
 				{
-					if (WinHttpSendRequest (hrequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, WINHTTP_IGNORE_REQUEST_TOTAL_LENGTH, 0))
-					{
-						if (!WinHttpReceiveResponse (hrequest, nullptr))
-						{
-							rc = GetLastError ();
-						}
-						else
-						{
-							option = 0;
-							size = sizeof (DWORD);
-
-							if (!WinHttpQueryHeaders (hrequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &option, &size, WINHTTP_NO_HEADER_INDEX))
-							{
-								rc = GetLastError ();
-							}
-							else
-							{
-								if (option == HTTP_STATUS_OK)
-								{
-									if (ptotallength)
-									{
-										size = sizeof (DWORD);
-										WinHttpQueryHeaders (hrequest, WINHTTP_QUERY_CONTENT_LENGTH | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, ptotallength, &size, WINHTTP_NO_HEADER_INDEX);
-									}
-
-									*pconnect = hconnect;
-									*prequest = hrequest;
-
-									return ERROR_SUCCESS;
-								}
-								else if (option == HTTP_STATUS_DENIED || option == HTTP_STATUS_FORBIDDEN)
-								{
-									rc = ERROR_NETWORK_ACCESS_DENIED;
-									break;
-								}
-							}
-						}
-					}
-					else
+					if (!WinHttpSendRequest (hrequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, WINHTTP_IGNORE_REQUEST_TOTAL_LENGTH, 0))
 					{
 						rc = GetLastError ();
 
-						if (rc == ERROR_WINHTTP_CANNOT_CONNECT)
-						{
-							break;
-						}
-						else if (rc == ERROR_WINHTTP_CONNECTION_ERROR)
+						if (rc == ERROR_WINHTTP_CONNECTION_ERROR)
 						{
 							option = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1 | WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_1 | WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2;
 
@@ -2765,7 +2734,28 @@ DWORD _r_inet_openurl (HINTERNET hsession, LPCWSTR url, LPCWSTR proxy_addr, LPHI
 						}
 						else
 						{
+							// ERROR_WINHTTP_CANNOT_CONNECT etc.
 							break;
+						}
+					}
+					else
+					{
+						if (!WinHttpReceiveResponse (hrequest, nullptr))
+						{
+							rc = GetLastError ();
+						}
+						else
+						{
+							if (ptotallength)
+							{
+								size = sizeof (DWORD);
+								WinHttpQueryHeaders (hrequest, WINHTTP_QUERY_CONTENT_LENGTH | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, ptotallength, &size, WINHTTP_NO_HEADER_INDEX);
+							}
+
+							*pconnect = hconnect;
+							*prequest = hrequest;
+
+							return ERROR_SUCCESS;
 						}
 					}
 				}
@@ -2781,14 +2771,10 @@ DWORD _r_inet_openurl (HINTERNET hsession, LPCWSTR url, LPCWSTR proxy_addr, LPHI
 	return rc;
 }
 
-bool _r_inet_readrequest (HINTERNET hrequest, LPSTR buffer, DWORD length, PDWORD preaded, PDWORD ptotalreaded)
+bool _r_inet_readrequest (HINTERNET hrequest, LPSTR buffer, DWORD buffer_length, PDWORD preaded, PDWORD ptotalreaded)
 {
 	DWORD readed = 0;
-
-	*buffer = ANSI_NULL;
-
-	if (!WinHttpReadData (hrequest, buffer, length, &readed))
-		return false;
+	const bool is_readed = !!WinHttpReadData (hrequest, buffer, buffer_length, &readed);
 
 	if (preaded)
 		*preaded = readed;
@@ -2796,12 +2782,7 @@ bool _r_inet_readrequest (HINTERNET hrequest, LPSTR buffer, DWORD length, PDWORD
 	if (ptotalreaded)
 		*ptotalreaded += readed;
 
-	if (!readed)
-		return false;
-
-	buffer[readed] = ANSI_NULL;
-
-	return true;
+	return is_readed;
 }
 
 DWORD _r_inet_parseurl (LPCWSTR url, INT * scheme_ptr, LPWSTR host_ptr, LPWORD port_ptr, LPWSTR path_ptr, LPWSTR user_ptr, LPWSTR pass_ptr)
@@ -2864,10 +2845,8 @@ DWORD _r_inet_parseurl (LPCWSTR url, INT * scheme_ptr, LPWSTR host_ptr, LPWORD p
 
 DWORD _r_inet_downloadurl (HINTERNET hsession, LPCWSTR proxy_addr, LPCWSTR url, LONG_PTR lpdest, bool is_filepath, _R_CALLBACK_HTTP_DOWNLOAD _callback, LONG_PTR lpdata)
 {
-	if (!lpdest)
+	if (!hsession || !lpdest)
 		return ERROR_BAD_ARGUMENTS;
-
-	bool result = false;
 
 	HINTERNET hconnect = nullptr;
 	HINTERNET hrequest = nullptr;
@@ -2883,68 +2862,57 @@ DWORD _r_inet_downloadurl (HINTERNET hsession, LPCWSTR proxy_addr, LPCWSTR url, 
 	else
 	{
 		const size_t buffer_length = _R_BUFFER_NET_LENGTH;
-		LPSTR content_buffer_a = new CHAR[buffer_length];
-		LPWSTR content_buffer_w = nullptr;
 
-		rstring *lpbuffer = reinterpret_cast<rstring*>(lpdest);
+		LPSTR content_buffer = new CHAR[buffer_length];
+
+		rstring* lpbuffer = reinterpret_cast<rstring*>(lpdest);
 		HANDLE hfile = reinterpret_cast<HANDLE>(lpdest);
 
-		if (is_filepath)
-		{
-			if (hfile != INVALID_HANDLE_VALUE)
-				result = true;
-		}
-		else
-		{
-			result = true;
-		}
+		DWORD notneed = 0;
+		DWORD readed = 0;
+		DWORD total_readed = 0;
 
-		if (result)
+		while (_r_inet_readrequest (hrequest, content_buffer, buffer_length - 1, &readed, &total_readed))
 		{
-			DWORD notneed = 0;
-			DWORD readed = 0;
-			DWORD total_readed = 0;
-
-			while (true)
+			if (!readed)
 			{
-				if (!_r_inet_readrequest (hrequest, content_buffer_a, buffer_length - 1, &readed, &total_readed))
+				rc = ERROR_SUCCESS;
+				break;
+			}
+
+			if (is_filepath)
+			{
+				if (!WriteFile (hfile, content_buffer, readed, &notneed, nullptr))
 				{
-					rc = ERROR_SUCCESS;
+					rc = GetLastError ();
+					break;
+				}
+			}
+			else
+			{
+				content_buffer[readed] = ANSI_NULL;
+
+				LPWSTR buffer = _r_str_utf8_to_utf16 (content_buffer);
+
+				if (!buffer)
+				{
+					rc = GetLastError ();
 					break;
 				}
 
-				if (is_filepath)
-				{
-					if (!WriteFile (hfile, content_buffer_a, readed, &notneed, nullptr))
-					{
-						rc = GetLastError ();
-						break;
-					}
-				}
-				else
-				{
-					if (!content_buffer_w)
-						content_buffer_w = new WCHAR[buffer_length];
+				lpbuffer->Append (buffer);
 
-					if (_r_str_multibyte2widechar (CP_ACP, content_buffer_a, content_buffer_w, readed))
-						lpbuffer->Append (content_buffer_w);
-				}
+				SAFE_DELETE_ARRAY (buffer);
+			}
 
-				if (_callback)
-				{
-					if (!_callback (total_readed, total_length, lpdata))
-					{
-						rc = ERROR_CANCELLED;
-						result = false;
-
-						break;
-					}
-				}
+			if (_callback && !_callback (total_readed, total_length, lpdata))
+			{
+				rc = ERROR_CANCELLED;
+				break;
 			}
 		}
 
-		SAFE_DELETE_ARRAY (content_buffer_a);
-		SAFE_DELETE_ARRAY (content_buffer_w);
+		SAFE_DELETE_ARRAY (content_buffer);
 	}
 
 	_r_inet_close (hrequest);
@@ -3163,6 +3131,9 @@ HICON _r_loadicon (HINSTANCE hinst, LPCWSTR name, INT size)
 
 bool _r_parseini (LPCWSTR path, rstringmap2 & pmap, rstringvec * psections)
 {
+	if (_r_str_isempty (path) || !_r_fs_exists (path))
+		return false;
+
 	rstring section_ptr;
 
 	size_t delimeter_pos;
@@ -3546,8 +3517,8 @@ void _r_ctrl_settabletext (HWND hwnd, INT ctrl_id1, LPCWSTR text1, INT ctrl_id2,
 	const INT wnd_spacing = rc_ctrl.left;
 	const INT wnd_width = _R_RECT_WIDTH (&rc_wnd) - (wnd_spacing * 2);
 
-	INT ctrl1_width = _r_dc_fontwidth (hdc1, text1, INVALID_SIZE_T);
-	INT ctrl2_width = _r_dc_fontwidth (hdc2, text2, INVALID_SIZE_T);
+	INT ctrl1_width = _r_dc_fontwidth (hdc1, text1, _r_str_length (text1)) + wnd_spacing;
+	INT ctrl2_width = _r_dc_fontwidth (hdc2, text2, _r_str_length (text2)) + wnd_spacing;
 
 	ctrl2_width = (std::min) (ctrl2_width, wnd_width - ctrl1_width - wnd_spacing);
 	ctrl1_width = (std::min) (ctrl1_width, wnd_width - ctrl2_width - wnd_spacing); // note: changed order for correct priority!
@@ -4258,7 +4229,7 @@ void _r_toolbar_setstyle (HWND hwnd, INT ctrl_id, DWORD exstyle)
 
 void _r_progress_setmarquee (HWND hwnd, INT ctrl_id, BOOL is_enable)
 {
-	SendDlgItemMessage (hwnd, ctrl_id, PBM_SETMARQUEE, (WPARAM)is_enable, (LPARAM)18);
+	SendDlgItemMessage (hwnd, ctrl_id, PBM_SETMARQUEE, (WPARAM)is_enable, (LPARAM)10);
 
 	_r_wnd_addstyle (hwnd, ctrl_id, is_enable ? PBS_MARQUEE : 0, PBS_MARQUEE, GWL_STYLE);
 }
